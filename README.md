@@ -6,6 +6,8 @@ This project is designed to be **robust**, **hands‑off**, and **museum / count
 
 ---
 
+![Example](example.jpg)
+
 ## ✨ Features
 
 * Displays MassDOT traffic images on an Inky display
