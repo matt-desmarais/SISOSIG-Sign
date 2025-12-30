@@ -89,7 +89,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=pi
-WorkingDirectory=/home/pi
+WorkingDirectory=/home/pi/SISOSIG-Sign
 
 # Wait up to 90 seconds for real Internet
 ExecStartPre=/bin/bash -c '\
@@ -99,7 +99,7 @@ ExecStartPre=/bin/bash -c '\
   done; \
   exit 1'
 
-ExecStart=/home/pi/.virtualenvs/pimoroni/bin/python3 /home/pi/slideshow.py
+ExecStart=/home/pi/.virtualenvs/pimoroni/bin/python3 /home/pi/SISOSIG-Sign/slideshow.py
 
 Restart=always
 RestartSec=10
