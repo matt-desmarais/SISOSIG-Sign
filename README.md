@@ -44,7 +44,7 @@ README.md              # This file
 
 ## 🖥 Hardware
 
-* Raspberry Pi (Zero 2 W, 3, or 4 recommended)
+* Raspberry Pi (Zero 2 W)
 * Pimoroni Inky display (auto-detected)
 * Wi‑Fi connection
 
