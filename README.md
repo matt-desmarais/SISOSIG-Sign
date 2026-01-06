@@ -82,28 +82,17 @@ python slideshow.py
 
 ```ini
 [Unit]
-Description=SISOSIG Inky Display
-After=network-online.target
-Wants=network-online.target
+Description=Inky Slideshow
+After=network.target
 
 [Service]
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/SISOSIG-Sign
-
-# Wait up to 90 seconds for real Internet
-ExecStartPre=/bin/bash -c '\
-  for i in {1..30}; do \
-    ping -c1 -W1 8.8.8.8 >/dev/null && exit 0; \
-    sleep 3; \
-  done; \
-  exit 1'
-
-ExecStart=/home/pi/.virtualenvs/pimoroni/bin/python3 /home/pi/SISOSIG-Sign/slideshow.py
-
+Environment="PATH=/home/pi/.virtualenvs/pimoroni/bin:/usr/bin"
+ExecStart=/home/pi/.virtualenvs/pimoroni/bin/python /home/pi/SISOSIG-Sign/slideshow.py
 Restart=always
-RestartSec=10
-Environment=PYTHONUNBUFFERED=1
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
