@@ -7,6 +7,7 @@ from PIL import Image
 from inky.auto import auto
 import datetime
 import subprocess
+import hashlib
 
 # ================= CONFIG =================
 IMAGE_URLS = [
@@ -17,7 +18,7 @@ IMAGE_URLS = [
 LOGO_PATH = "sisosig.png"
 QR_PATH = "qr-code.png"
 
-SLIDE_SECONDS = 30
+SLIDE_SECONDS = 32
 MAX_RETRIES = 3
 TIMEOUT = 10
 
@@ -26,7 +27,7 @@ ONLINE_THRESHOLD = 1
 
 WIFI_INTERFACE = "wlan0"
 
-REFRESH_RETRY_SECONDS = 10   # retry downloads until success
+REFRESH_RETRY_SECONDS = 10
 # ==========================================
 
 # ================= DISPLAY =================
@@ -34,9 +35,11 @@ display = auto(ask_user=False, verbose=False)
 WIDTH, HEIGHT = display.resolution
 print(f"[DEBUG] Display resolution: {WIDTH}x{HEIGHT}")
 
-# ================= LOAD LOGO =================
+# ================= LOAD ASSETS =================
 with open(LOGO_PATH, "rb") as f:
     logo_bytes = f.read()
+
+LOGO_IMAGE = Image.open(BytesIO(logo_bytes)).convert("RGBA")
 print("[DEBUG] Logo loaded")
 
 # ================= WIFI CHECK =================
@@ -48,11 +51,8 @@ def wifi_connected(interface=WIFI_INTERFACE):
             stderr=subprocess.DEVNULL,
             text=True,
         ).stdout
-        connected = "state UP" in out and "inet " in out
-        print(f"[DEBUG] WiFi {interface}: {'CONNECTED' if connected else 'DISCONNECTED'}")
-        return connected
-    except Exception as e:
-        print(f"[DEBUG] WiFi check error: {e}")
+        return "state UP" in out and "inet " in out
+    except Exception:
         return False
 
 # ================= QR SLIDE =================
@@ -64,29 +64,29 @@ def load_qr_slide():
 
     canvas = Image.new("RGB", (WIDTH, HEIGHT), (255, 255, 255))
     canvas.paste(img, ((WIDTH - img.width)//2, (HEIGHT - img.height)//2))
-    print("[DEBUG] QR slide prepared")
     return canvas
 
 offline_slide = load_qr_slide()
 
 # ================= IMAGE DOWNLOAD =================
 def download_image(url):
-    for attempt in range(1, MAX_RETRIES + 1):
+    for _ in range(MAX_RETRIES):
         try:
-            print(f"[DEBUG] Downloading {url} (attempt {attempt})")
             r = requests.get(url, timeout=TIMEOUT)
             r.raise_for_status()
-            return Image.open(BytesIO(r.content)).convert("RGB")
-        except Exception as e:
-            print(f"[DEBUG] Download failed: {e}")
+            data = r.content
+            h = hashlib.sha256(data).hexdigest()
+            img = Image.open(BytesIO(data)).convert("RGB")
+            return img, h
+        except Exception:
             time.sleep(1)
-    return None
+    return None, None
 
 # ================= PREPARE SLIDE =================
 def prepare_slide(url):
-    img = download_image(url)
+    img, h = download_image(url)
     if not img:
-        return None
+        return None, None
 
     canvas = Image.new("RGB", (WIDTH, HEIGHT), (255, 255, 255))
 
@@ -100,11 +100,10 @@ def prepare_slide(url):
     footer_h = HEIGHT - footer_y
 
     if footer_h > 5:
-        logo = Image.open(BytesIO(logo_bytes)).convert("RGBA")
-        lw, lh = logo.size
-        scale = footer_h / lh
-        logo = logo.resize(
-            (int(lw * scale), int(lh * scale)),
+        lw, lh = LOGO_IMAGE.size
+        s = footer_h / lh
+        logo = LOGO_IMAGE.resize(
+            (int(lw * s), int(lh * s)),
             Image.Resampling.LANCZOS,
         )
         canvas.paste(
@@ -113,25 +112,25 @@ def prepare_slide(url):
             logo,
         )
 
-    return canvas
+    return canvas, h
 
 # ================= ATOMIC FETCH =================
 def fetch_slides_atomic():
-    print("[DEBUG] Fetching slides (atomic)")
-    new_slides = []
+    slides = []
+    hashes = []
 
     for url in IMAGE_URLS:
-        slide = prepare_slide(url)
+        slide, h = prepare_slide(url)
         if not slide:
-            print("[DEBUG] Slide refresh FAILED — keeping current slides")
             return None
-        new_slides.append(slide)
+        slides.append(slide)
+        hashes.append(h)
 
-    print("[DEBUG] Slide refresh SUCCESS")
-    return new_slides
+    return slides, hashes
 
 # ================= STATE =================
 slides = []
+slide_hashes = []
 slide_index = 0
 next_slide_time = time.monotonic()
 
@@ -161,16 +160,14 @@ while True:
         online_successes = 0
 
     if offline_failures >= OFFLINE_THRESHOLD and not offline_mode:
-        print("[DEBUG] Transition to OFFLINE")
         display.set_image(offline_slide)
         display.show()
         offline_mode = True
 
     if online_successes >= ONLINE_THRESHOLD and offline_mode:
-        print("[DEBUG] Transition to ONLINE")
-        new_slides = fetch_slides_atomic()
-        if new_slides:
-            slides = new_slides
+        result = fetch_slides_atomic()
+        if result:
+            slides, slide_hashes = result
             slide_index = 0
             next_slide_time = now_mono
             offline_mode = False
@@ -188,22 +185,39 @@ while True:
         and last_refresh_bucket != bucket
         and now_mono - last_refresh_attempt >= REFRESH_RETRY_SECONDS
     ):
-        print("[DEBUG] Attempting refresh (retry-until-success)")
         last_refresh_attempt = now_mono
+        result = fetch_slides_atomic()
 
-        new_slides = fetch_slides_atomic()
-        if new_slides:
-            print("[DEBUG] Refresh committed immediately")
-            slides = new_slides
-            slide_index = 0
-            last_refresh_bucket = bucket
+        if result:
+            new_slides, new_hashes = result
+
+            if new_hashes != slide_hashes:
+
+                # Only commit and refresh if we successfully have all slides
+                if all(new_slides):
+                    # Optional: very quick flash to reduce ghosting
+                    # display.set_image(Image.new("RGB", (WIDTH, HEIGHT), (255, 255, 255)))
+                    # display.show()
+                    # time.sleep(0.05)
+
+                    slides = new_slides
+                    slide_hashes = new_hashes
+                    slide_index = 0
+                    last_refresh_bucket = bucket
+                    next_slide_time = now_mono
+                    print("[DEBUG] Content changed — refresh committed")
+                else:
+                    print("[DEBUG] Slide download incomplete — keeping current display")
+
+
+            else:
+                print("[DEBUG] Content identical — retrying")
 
     # ---------- Slide timing ----------
     if slides and now_mono >= next_slide_time:
         display.set_image(slides[slide_index])
         display.show()
-        print(f"[DEBUG] Displayed slide {slide_index}")
         slide_index = (slide_index + 1) % len(slides)
-        next_slide_time += SLIDE_SECONDS
+        next_slide_time = now_mono + SLIDE_SECONDS
 
     time.sleep(0.1)
